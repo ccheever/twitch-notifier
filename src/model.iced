@@ -1,5 +1,7 @@
 Datastore = require "nedb"
 
+MIN_INTERVAL_MINUTES = 60 # 1 hour
+
 # User database
 #   nPhoneNumber: normalized phone #, unique key identifying user
 #   uPhoneNumber: the phone # as the user entered it
@@ -115,20 +117,137 @@ disableUser = (phoneNumber) ->
   setUserEnabled phoneNumber, false
 
 
-createAlert = (phoneNumber, twitchGameId, threshold) ->
+createAlert = (phoneNumber, twitchGameId, threshold, callback) ->
+  """Creates an alert to SMS a person when a certain game has more than
+      a certain number of people watching it"""
+  
+  npn = normalizePhoneNumber phoneNumber
+  newAlert = 
+    nPhoneNumber: npn
+    twitchGameId: twitchGameId
+    threshold: threshold
+    enabled: true
+    onCooldown: false
+    lastFired: null
+    createTime: Date.now()
+
+  await
+    alerts.update {
+        nPhoneNumber: npn,
+        twitchGameId: twitchGameId,
+      }, newAlert, { upsert: true }, defer(err, numReplaced, upsert)
+
+  console.error "Could not create alert for '#{ phoneNumber }' for #{ twitchGameId }" if err?
+
+  if upsert
+    console.log "Updated alert for #{ phoneNumber } for #{ twitchGameId } to #{ threshold }"
+  else
+    console.log "Created new alert for #{ phoneNumber } for #{ twitchGameId } with threshold #{ threshold }"
+
+  callback err, newAlert, upsert if callback?
+
+
+deleteAlert = (phoneNumber, twitchGameId, callback) ->
+  """Deletes the alert for a given user for a given game"""
+
+  npn = normalizePhoneNumber phoneNumber
+  await
+    alerts.remove {
+      nPhoneNumber: npn,
+      twitchGameId: twitchGameId,
+    }, { multi: true }, defer(err, numRemoved)
+
+  console.error "Error removing alert for #{ npn } for #{ twitchGameId }" if err?
+  callback err, numRemoved if callback?
+
+recordAlertFired = (phoneNumber, twitchGameId, callback) ->
+  """Records that an alert has been fired in the database"""
+
   npn = normalizePhoneNumber phoneNumber
 
+  await
+    alerts.update {
+      nPhoneNumber: npn,
+      twitchGameId: twitchGameId,
+    }, { $set: {
+      onCooldown: true,
+      lastFired: Date.now(),
+    }}, {}, defer(err, numReplaced, upsert)
+
+  console.error "Error recording alert fire for #{ npn } for #{ twitchGameId }" if err?
+  callback err, numReplaced if callback?
+
+checkShouldAlertFire = (phoneNumber, twitchGameId, currentViewers, callback) ->
+  """Calls `callback` with true/false depending on whether the 
+      alert should fire and also will reset the cooldown of the alert
+      """
+
+  npn = normalizePhoneNumber phoneNumber
+
+  await
+    alerts.find {
+      nPhoneNumber: npn,
+      twitchGameId: twitchGameId,
+    }, defer(err, docs)
+
+  console.error "Error checking if alert should fire for #{ phoneNumber } for #{ twitchGameId }" if err?
+
+  if docs.length > 1
+    # If there is more than one alert, then this shouldn't happen
+    console.error "More than 1 alert for phone number/game pair #{ npn }/#{ twitchGameId }"
+    callback true, false
+  else if not docs
+    callback err, false
+  else
+    alert = docs[0]
+    if not alert.enabled
+      # This alert is disabled so we should never fire while like this
+      callback err, false, alert
+
+    else if ((Date.now() - alert.lastFired) / 1000) < (60 * MIN_INTERVAL_MINUTES)
+      # If the alert has been fired in the last hour, then we 
+      # won't fire it
+      callback err, false, alert
+
+    else
+      if currentViewers >= alert.threshold
+        if alert.onCooldown
+          # We are above the viewer threshold but we are on cooldown, 
+          # so we shouldn't fire
+          callback err, false, alert
+
+        else
+          # We are above the viewer threshold and we are not on cooldown
+          # so we should fire
+          callback err, true, alert
+      else
+        # There aren't enough viewers to fire but if we are on cooldown
+        # then we want to turn off cooldown since we've dropped below
+        # the threshold
+        if alert.onCooldown
+          alerts.update {
+            nPhoneNumber: npn,
+            twitchGameId: twitchGameId,
+          }, { $set: {
+            onCooldown: false,
+          }}, {}, (err, numReplaced, upsert) -> 
+            console.error "Couldn't turn off cooldown on alert for #{ npn }/#{ twitchGameId }" if err?
+
+        callback err, false, alert
+
+  
 
 
-
-_dump = () ->
+_dump = (db) ->
   """Dump the entire database for debugging"""
 
   await
-    users.find {}, defer(err, docs)
+    db.find {}, defer(err, docs)
   for doc in docs
     console.log(JSON.stringify(docs))
 
+_dumpUsers = () -> _dump users
+_dumpAlerts = () -> _dump alerts
 
 module.exports =
   normalizePhoneNumber: normalizePhoneNumber
@@ -137,8 +256,14 @@ module.exports =
   setUserEnabled: setUserEnabled
   enableUser: enableUser
   disableUser: disableUser
+  createAlert: createAlert
+  deleteAlert: deleteAlert
+  checkShouldAlertFire: checkShouldAlertFire
 
   _dump: _dump
+  _dumpUsers: _dumpUsers
+  _dumpAlerts: _dumpAlerts
+
   __expose:
     users: users
     alerts: alerts
