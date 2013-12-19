@@ -1,7 +1,7 @@
 http = require "http"
 twilio = require "twilio"
 twilioConfig = require "./twilio-config"
-phoneNumbersConfig = require "./phone-number-config"
+phoneNumbersConfig = require "./phone-numbers-config"
 
 
 # Max limit is 100 it seems; for now that's sufficient
@@ -47,7 +47,7 @@ parseTopGames = (url) ->
     gameName = info.game.name
     #console.log "#{ viewers } people are watching #{ gameName } on #{ channels } channels."
     if gameId == SC2_TWITCH_ID
-      sc2Alert viewers, channels
+      sc2Alert viewers, channels, info.game
       break
 
 
@@ -56,12 +56,12 @@ parseTopGames = (url) ->
   __expose.data = data
   #console.log "done."
 
-sc2Alert = (viewers, channels) ->
-  s = "SC2 Alert! #{ viewers } ppl are watching SC2 on #{ channels } channels."
+sc2Alert = (viewers, channels, game) ->
+  s = "#{ game.name } Twitch alert! #{ viewers } ppl are watching on #{ channels } channels. twitch://game/#{ encodeURIComponent game.name }"
   console.log s
 
   # Send an SMS
-  sendSms s, ["650-521-6131"]
+  sendSms s, [phoneNumbersConfig.CharlieCheever]
  
 
 
