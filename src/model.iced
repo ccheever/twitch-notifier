@@ -1,4 +1,9 @@
 Datastore = require "nedb"
+twilio = require "twilio"
+twilioConfig = require "./twilio-config"
+phoneNumbersConfig = require "./phone-numbers-config"
+
+twilioClient = twilio twilioConfig.accountSid, twilioConfig.authToken
 
 MIN_INTERVAL_MINUTES = 60 # 1 hour
 
@@ -235,7 +240,50 @@ checkShouldAlertFire = (phoneNumber, twitchGameId, currentViewers, callback) ->
 
         callback err, false, alert
 
+findAlertsForGame = (twitchGameId, callback) ->
+  await
+    alerts.find {
+      twitchGameId: twitchGameId,
+      enabled: true,
+    }, defer(err, docs)
+  console.error "Error finding all alerts for #{ twitchGameId }" if err?
+  callback err, docs if callback?
+
   
+fireAlert = (phoneNumber, game, currentInfo, callback) ->
+  s = "#{ game.name } Twitch alert! #{ currentInfo.viewers } ppl are watching #{ currentInfo.channels } channels. twitch://game/#{ encodeURIComponent game.name }"
+  await
+    sendSms s, [phoneNumber], defer err
+  if err
+    console.error "Couldn't send SMS to #{ phoneNumber }"
+    callback true, phoneNumber, game, currentInfo if callback?
+  else
+    await
+      recordAlertFired phoneNumber, game.twitchGameId, defer err
+    console.error "Couldn't record alert" if err?
+    callback err, phoneNumber, game, currentInfo if callback?
+
+sendSms = (message, recipients, callback) ->
+  """Sends an SMS to a given list of recipients"""
+
+  allOk = true
+  await
+    for toNumber, i in recipients
+      twilioClient.sendMessage {
+        to: toNumber,
+        from: twilioConfig.number,
+        body: message,
+      }, (err, responseData) ->
+        if err
+          console.error "Twilio Error: from=#{ responseData.from } body=#{ responseData.body }"
+          allOk = false
+        defer()
+  if allOk
+    callback null, recipients.length, message if callback?
+  else
+    callback true, recipients.length, message if callback?
+
+
 
 
 _dump = (db) ->
@@ -259,6 +307,7 @@ module.exports =
   createAlert: createAlert
   deleteAlert: deleteAlert
   checkShouldAlertFire: checkShouldAlertFire
+  sendSms: sendSms
 
   _dump: _dump
   _dumpUsers: _dumpUsers

@@ -14,18 +14,7 @@ SC2_TWITCH_ID = 21818
 
 twilioClient = twilio twilioConfig.accountSid, twilioConfig.authToken
 
-sendSms = (message, recipients) ->
-  for toNumber in recipients
-    twilioClient.sendMessage {
-      to: toNumber,
-      from: twilioConfig.number,
-      body: message,
-    }, (err, responseData) ->
-      if err
-        console.error "Twilio Error: from=#{ responseData.from } body=#{ responseData.body }"
-
-
-parseTopGames = (url) ->
+checkTopGames = (url) ->
   if !url?
     url = TWITCH_TOP_GAMES_DATA_URL
   await 
@@ -46,6 +35,11 @@ parseTopGames = (url) ->
     giantbombId = info.game.giantbomb_id
     gameName = info.game.name
     #console.log "#{ viewers } people are watching #{ gameName } on #{ channels } channels."
+    errorInSendingAlerts = null
+    
+    await
+      model.findAlertsForGameI
+    
     if gameId == SC2_TWITCH_ID
       sc2Alert viewers, channels, info.game
       break
@@ -62,11 +56,10 @@ sc2Alert = (viewers, channels, game) ->
 
   # Send an SMS
   sendSms s, [phoneNumbersConfig.CharlieCheever]
- 
 
 
 __expose = {}
 
 module.exports =
-  parseTopGames: parseTopGames
+  checkTopGames: checkTopGames
   __expose: __expose
